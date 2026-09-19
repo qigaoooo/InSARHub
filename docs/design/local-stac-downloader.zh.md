@@ -2,13 +2,14 @@
 
 | 项 | 内容 |
 |---|---|
-| 文档版本 | **v0.3（完善稿，待确认）** |
+| 文档版本 | **v0.4（复盘修订稿，待确认）** |
 | 状态 | **只迭代文档；你确认前不写业务代码** |
 | 分支 | `feat/stac-api`（fork: `qigaoooo/InSARHub`） |
 | 对接对象 | 本地 Docker **STAC API**（stac-ingest → 官方 `stac-fastapi-pgstac` + `/assets/`） |
-| 上游设计参照 | [`refs/stac-ingest-design_v2.zh.md`](refs/stac-ingest-design_v2.zh.md) |
+| 上游设计参照 | [`refs/stac-ingest-design_v2.zh.md`](refs/stac-ingest-design_v2.zh.md)（**不进上游 PR**） |
 | InSARHub 依据 | `CONTRIBUTING.md`、`docs/contributing/backend.md`、`test/README.md` |
 | 规范 | [STAC 1.1.0](https://github.com/radiantearth/stac-spec)、[STAC API](https://github.com/radiantearth/stac-api-spec)、[File Extension 2.1.0](https://github.com/stac-extensions/file) |
+| 复盘 | v0.3 → v0.4：补 `gui_hidden`、属性分档、联调 URL、产品定位 |
 
 ---
 
@@ -30,9 +31,40 @@
 | 类怎么挂？ | `BaseDownloader` → `STAC_Base`（无 `name`）→ **`STAC_API`**（`name="STAC_API"`） |
 | 新依赖？ | **否**，只用已有 `requests` |
 | 默认 Collection？ | `["sentinel-1-slc"]` |
-| 默认 API？ | 占位 `http://127.0.0.1:8082`（对端定稿只改配置） |
-| 处理器兼容？ | MVP **不声明** `compatible_processor`；落盘尽量贴近 `StackPaths` 的 `…/slc/`，便于日后对接 |
-| 配对？ | MVP **不实现** ASF 级 `select_pairs`（无垂直基线 API）；GUI/CLI 调用时返回明确错误或跳过 |
+| 默认 API URL？ | **不写死生产默认**；配置必填或占位空串 + 文档示例；对端 stac-ingest 定稿后再填推荐值 |
+| MVP 产品入口？ | **CLI / Python API 优先**；GUI **隐藏**（见 §1.1） |
+| 处理器兼容？ | MVP **无** Processor 声明 `compatible_downloader="STAC_API"` |
+| 配对 / merge？ | MVP **不支持** `select_pairs`、`merge=True` |
+| 同机二次下载？ | MVP 接受 HTTP 再拉一份（可移植）；不做 DATA_ROOT 硬链优化 |
+
+### 1.1 GUI 可见性（复盘强制修订）
+
+InSARHub tier2 约定（`test_gui_offers_only_downloaders_a_processor_can_consume`）：
+
+- 若无 Processor 消费某下载器 → 该类必须 `gui_hidden = True`，否则测试失败，且 GUI 会把用户带进「下完无法处理」死胡同。
+
+因此 **`STAC_API` MVP 必须**：
+
+```python
+class STAC_API(STAC_Base):
+    name = "STAC_API"
+    gui_hidden = True   # 无兼容 Processor 前不得上架 GUI
+```
+
+| 入口 | MVP |
+|---|---|
+| `Downloader.create("STAC_API", …)` / CLI | ✅ 支持 |
+| Web GUI 下载器下拉 | ❌ 不出现（与 `NISAR_RSLC` / `NISAR_GUNW` 同模式） |
+| GUI「Add Job」→ `select_pairs` | 不适用（已隐藏） |
+
+**二期**（另开设计）：某 Processor（或现有本地处理器）声明 `compatible_downloader="STAC_API"` 且落盘/配对契约对齐后，再去掉 `gui_hidden` 并评估 GUI 配对路径。
+
+### 1.2 已知局限（写入文档，避免误解）
+
+- **不是**「注册后即可像 `S1_SLC` 一样在 Web 里搜→配对→处理」。  
+- Catalog 文件已在 stac-ingest 盘上时，InSARHub 仍经 HTTP 下载到 workdir（带宽/磁盘成本）。  
+- 无垂直基线时无法复现 ASF `select_pairs` 质量。  
+- Item 若缺少 orbit/frame 扩展字段，stack 键退化（见 §4），CLI filter 能力变弱，但 search/download 仍可用。
 
 ---
 
@@ -64,7 +96,7 @@
 ```text
 BaseDownloader                    # core/base.py；抽象六方法
   └── STAC_Base                   # downloader/stac_base.py；无 name
-        └── STAC_API              # downloader/stac_api.py；name="STAC_API"
+        └── STAC_API              # stac_api.py；name="STAC_API"；gui_hidden=True
 ```
 
 - 中间基类**不设** `name`。  
@@ -76,7 +108,7 @@ BaseDownloader                    # core/base.py；抽象六方法
 | 路径 | 内容 |
 |---|---|
 | `src/insarhub/downloader/stac_base.py` | `STACProduct`、`_load_items`、`_format_item`、`STAC_Base` |
-| `src/insarhub/downloader/stac_api.py` | `class STAC_API(STAC_Base): name = "STAC_API"` |
+| `src/insarhub/downloader/stac_api.py` | `name="STAC_API"`，**`gui_hidden = True`** |
 | `src/insarhub/downloader/__init__.py` | 增加 import |
 | `src/insarhub/config/defaultconfig.py` | `STAC_Base_Config`、`STAC_API_Config` |
 | `src/insarhub/config/__init__.py` | 导出 |
@@ -86,8 +118,8 @@ BaseDownloader                    # core/base.py；抽象六方法
 | `docs/advanced/downloader.md` + `.zh.md` | 用法小节 |
 | `CHANGELOG.md` | `[Unreleased]` Added 条目 |
 
-CLI：`commands/downloader.py` 已按 `BaseDownloader` 泛型封装，**一般无需改**（注册后自动出现）。  
-GUI：下载器下拉来自注册表；Settings 来自 `_ui_*`；**一般无需改 React**。
+CLI：`commands/downloader.py` 泛型封装，注册后 CLI 可用。  
+GUI：MVP **不出现**在下拉（`gui_hidden`）；**无需改 React**。
 
 ### 3.3 `stac_base.py` 内部流水线
 
@@ -131,28 +163,39 @@ dict[tuple, list[STACProduct]]
 # 键优先 (pathNumber, frameNumber)；缺失见 §4.3
 ```
 
-### 4.2 `properties` 映射表
+### 4.2 `properties` 映射表（分档）
 
-| InSARHub 键 | STAC 来源（优先级从上到下） | 备注 |
+#### 必填（缺失则跳过该 Item，并 warning）
+
+| InSARHub 键 | STAC 来源 | 说明 |
 |---|---|---|
-| `sceneName` | `ingest:provider_product_id` → 去掉首段 `provider:` 后的 `id` → 完整 `id` | 列表/下载子集主键 |
-| `fileID` | `Item.id` | 保留 `asf:…` 形式 |
-| `startTime` | `datetime` → `start_datetime` | **必须**能解析为 ISO；缺则该 Item 跳过并 warning |
-| `stopTime` | `end_datetime` → `datetime` | |
-| `pathNumber` | `sat:relative_orbit` → `pathNumber` → `relativeOrbit` | int 化 |
-| `frameNumber` | `frameNumber` → `asfFrame` | 无则见 §4.3 |
-| `flightDirection` | `sat:orbit_state` | `ascending`/`descending` → `ASCENDING`/`DESCENDING` |
-| `platform` | `platform` → `constellation` | |
-| `polarization` | `sar:polarizations` | list → `VV+VH` 风格 join |
-| `processingLevel` | `sar:product_type` → `processing:level` → `"SLC"` | |
-| `bytes` | 主 asset `file:size` | |
-| `fileName` | 主 asset `href` basename | 与 stac-ingest「保留提供方原名」一致 |
-| `url` | 主 asset 绝对 `href` | 下载入口 |
-| `collection` | Item `collection` | |
-| `_stac_item_id` | `id` | 内部 |
-| `_checksum` | 主 asset `file:checksum` | Multihash；可选校验 |
+| `sceneName` | `ingest:provider_product_id` → 去 `provider:` 前缀的 `id` → 完整 `id` | 下载子集主键 |
+| `startTime` | `datetime` → `start_datetime` | ISO；无法解析则跳过 |
+| `url` + `fileName` | 主 asset 绝对 `http(s)` `href` | 无合格主 asset 则不可 download（search 可保留并标记） |
 
-`geometry` ← Feature.`geometry`。
+#### 强烈建议（有则映射，无则 `None`，不跳过 Item）
+
+| InSARHub 键 | STAC 来源 |
+|---|---|
+| `fileID` | `Item.id` |
+| `stopTime` | `end_datetime` → `datetime` |
+| `collection` | `collection` |
+| `bytes` | 主 asset `file:size` |
+| `_checksum` | 主 asset `file:checksum` |
+| `geometry` | Feature.geometry（无则 footprint 受限） |
+
+#### 可选增强（对端 stac-ingest 写齐后再有完整 stack UX）
+
+| InSARHub 键 | STAC 来源 |
+|---|---|
+| `pathNumber` | `sat:relative_orbit` → `pathNumber` → `relativeOrbit` |
+| `frameNumber` | `frameNumber` → `asfFrame` |
+| `flightDirection` | `sat:orbit_state` → `ASCENDING`/`DESCENDING` |
+| `platform` | `platform` → `constellation` |
+| `polarization` | `sar:polarizations` |
+| `processingLevel` | `sar:product_type` → `processing:level` |
+
+**不承诺**：对端未写入 `sat:` / `sar:` 时仍有与 ASF 相同的 path/frame 过滤体验。
 
 ### 4.3 Stack 分组键
 
@@ -162,7 +205,7 @@ dict[tuple, list[STACProduct]]
 否则 → ("local", collection_id 或 "default")
 ```
 
-与 ASF 的 `(path, frame)` 打印习惯兼容；`filter(path_frame=…)` 对 `"unknown"` / `"local"` 键按字符串匹配。
+退化键下：落盘目录仍合法（见 §5）；`filter(path_frame=…)` 仅对能解析的键有效。
 
 ### 4.4 主 Asset 选择
 
@@ -233,49 +276,54 @@ class STACPaths:
 
 ---
 
-## 6. 配置与 UI
+## 6. 配置与入口
 
 ```python
 @dataclass
 class STAC_Base_Config:
     name: str = "STAC_Base_Config"
-    stac_api_url: str = "http://127.0.0.1:8082"
+    # 对端未定稿：不要把现场端口写死进库。空串表示「调用前必须设置」。
+    stac_api_url: str = ""
     collections: list[str] | None = field(
         default_factory=lambda: ["sentinel-1-slc"]
     )
-    intersectsWith: str | None = None   # WKT；内部转 GeoJSON 填 intersects
+    intersectsWith: str | None = None
     start: str | None = None
-    end: str | None = None              # 纯日期 → 当日 23:59:59（对齐 ASF）
+    end: str | None = None
     maxResults: int | None = 100
     granule_names: str | list[str] | None = None
     asset_roles: list[str] = field(default_factory=lambda: ["data"])
     verify_checksum: bool = False
     max_workers: int = 3
     ssl_verify: bool = True
-    # 鉴权（均勿写入仓库默认值/示例密钥）
-    auth_token: str | None = None       # → Authorization: Bearer …
+    auth_token: str | None = None       # Authorization: Bearer …
     basic_user: str | None = None
     basic_password: str | None = None
     workdir: Path | str = field(default_factory=lambda: Path.cwd())
 
-    _ui_groups = [
+    _ui_groups = [  # 即便 gui_hidden，保留 schema 供日后揭开 GUI / 文档生成
         {"label": "STAC", "fields": [
             "stac_api_url", "collections", "verify_checksum",
             "max_workers", "ssl_verify", "maxResults",
         ]},
     ]
-    # _ui_fields: text / bool / number / auto_number …
 ```
+
+`search()` 若 `stac_api_url` 为空 → 立即 `ValueError`，提示设置 URL（文档给示例，例如对端常用 `http://127.0.0.1:<port>/stac` 或直连 app 端口——**以 stac-ingest 联调说明为准**）。
+
+### 6.1 配置入口（MVP，GUI 隐藏时）
+
+| 方式 | 说明 |
+|---|---|
+| Python | `STAC_API_Config(stac_api_url="http://…", …)` |
+| CLI | 该下载器的 config / 环境变量（实现时与现有 CLI 配置机制对齐） |
+| 环境变量（建议） | `INSARHUB_STAC_API_URL` 若设则覆盖空默认（实现可选，写入 advanced 文档） |
+
+注意：GUI 在下载器类型不一致时只会透传 `max_workers` / `ssl_verify`；`stac_api_url` **不会**从 `S1_SLC` 设置泄漏——对 CLI 优先 MVP 无影响。
 
 `STAC_API_Config(STAC_Base_Config)`：`name = "STAC_API_Config"`。
 
-`search_filter_schema`（叶子类上）：
-
-| name | kind | 说明 |
-|---|---|---|
-| `flightDirection` | select ASCENDING/DESCENDING | 优先 API `query`；否则本地过滤 |
-| `relativeOrbit` / path | range 或 text | 同上 |
-| frame | range 或 text | 同上 |
+`search_filter_schema`：仍可声明 flightDirection / path / frame，供 CLI 与日后 GUI；缺扩展字段时过滤结果可能为空，属预期。
 
 ---
 
@@ -325,7 +373,7 @@ def download(self, save_path=None, max_workers=None,
 
 ### 7.4 `select_pairs`
 
-MVP：**显式不支持**。
+MVP：**显式不支持**（GUI 已 `gui_hidden`，主要防 CLI/脚本误调）。
 
 ```python
 def select_pairs(self, *args, **kwargs):
@@ -334,8 +382,6 @@ def select_pairs(self, *args, **kwargs):
         "pair selection will be added when perpendicular baseline is available."
     )
 ```
-
-若 GUI 硬编码调用，需在联调时确认路由对 `NotImplementedError` 的展示（实现阶段检查 `search.py` / processor 入口）。
 
 ---
 
@@ -358,12 +404,15 @@ Session：`requests.Session()`；`verify=ssl_verify`；headers 带可选 Bearer�
 
 | 用例 | 断言 |
 |---|---|
-| `_format_item` 样例 JSON | `sceneName` / `pathNumber` / `url` / `flightDirection` |
-| mock `POST /search` | `results` 分组键、`active_results` |
+| `_format_item` 含可选增强字段的样例 | `pathNumber` / `flightDirection` 等 |
+| `_format_item` 仅必填字段 | 无 path/frame 时仍产出；分组 `("local", …)` |
+| mock `POST /search` | `results` 分组、`active_results` |
 | mock asset `GET` | 文件落在 `…/slc/<basename>` |
 | 缺 `datetime` | Item 被跳过 |
 | `file://` href | download 拒绝 |
 | 注册 | `"STAC_API" in Downloader._registry` |
+| **gui_hidden** | `STAC_API.gui_hidden is True`（满足「无消费者则隐藏」测试） |
+| `_format_item` 仅必填字段 | 无 path/frame 时仍产出 product，分组为 `("local", …)` |
 | 配置 UI 字段 | `_ui_fields` 键 ⊆ dataclass 字段（沿用 tier2 惯例） |
 
 命令：`pytest -m "basic or regression"`（含新文件）。  
@@ -375,34 +424,48 @@ Session：`requests.Session()`；`verify=ssl_verify`；headers 带可选 Bearer�
 
 | 纳入 PR | 不纳入 |
 |---|---|
-| `stac_base.py` / `stac_api.py` / config / paths / tests / CHANGELOG / advanced 文档 | `.cursor/` |
-| 可选：精简版设计说明链到 `docs/` | `docs/design/refs/stac-ingest-design_v2.zh.md` 全文（外部仓设计，建议 PR 前移出或改为短链接说明） |
+| `stac_*.py` / config / paths / tests / CHANGELOG / `docs/advanced/downloader*` 短说明 | `.cursor/` |
+| 可选：`docs/design/local-stac-downloader.zh.md` 精简后的 InSARHub 侧说明 | **`docs/design/refs/stac-ingest-design_v2.zh.md` 全文**（PR 前删除或改 `.gitignore` / 移出分支） |
 
 ---
 
 ## 11. 实现顺序（仅在方案确认后执行）
 
-1. Config + `STACPaths` + `STACProduct` + `_format_item` + 单测  
-2. `_load_items`（分页）+ `search` / `filter` / `reset` / `summary`  
-3. `download` + checksum 可选  
-4. `STAC_API` 注册 + footprint（最小）  
-5. 文档 + CHANGELOG  
+1. Config（空默认 URL）+ `STACPaths` + `STACProduct` + 分档 `_format_item` + 单测  
+2. `_load_items` + `search` / `filter` / `reset` / `summary`  
+3. `download` + 可选 checksum；拒绝非 http(s)  
+4. `STAC_API` 注册且 **`gui_hidden=True`**  
+5. advanced 文档（CLI 示例）+ CHANGELOG  
 6. `pytest -m "basic or regression"`  
 
 ---
 
-## 12. 待你确认的清单
+## 12. 复盘结论摘要
 
-请逐条回复 **同意 / 修改意见**：
-
-1. **注册名** `STAC_API`、**仅 requests**、默认 Collection `sentinel-1-slc` — 维持？  
-2. **落盘**采用 `p{path}_f{frame}/slc/`（`StackPaths` 风格）— 同意？  
-3. **MVP 不支持** `select_pairs` 与 `merge=True` — 同意？  
-4. **`verify_checksum` 默认 False** — 同意？  
-5. **占位 API** `http://127.0.0.1:8082` — 是否改为你预期的反代路径（如 `http://127.0.0.1:36610/stac`）？  
-6. **PR 时是否保留** `docs/design/refs/stac-ingest-design_v2.zh.md`，还是仅留 InSARHub 本方案、refs 留本机？  
-7. 其它：鉴权只要 Bearer + basic 是否足够？
+| 项 | v0.4 处理 |
+|---|---|
+| 无 Processor 却上架 GUI → 测试失败 | **`gui_hidden=True`，CLI 优先** |
+| GUI Add Job / select_pairs | MVP 不触及；二期再议 |
+| 属性映射过乐观 | **必填 / 建议 / 可选增强** 分档 |
+| API 端口未定 | **默认空 URL**，联调后写文档推荐值 |
+| 同机二次下载 | 接受并写明局限 |
+| refs 外仓设计进 PR | **明确排除** |
 
 ---
 
-**请确认或批注本 v0.3。** 收到「确认方案，开写代码」之前，**不修改** `src/` 业务代码。
+## 13. 待你确认的清单
+
+请逐条回复 **同意 / 修改**：
+
+1. MVP：`gui_hidden=True`，主入口 CLI/Python — 同意？  
+2. 注册名 `STAC_API`、仅 `requests`、默认 Collection `sentinel-1-slc` — 维持？  
+3. 落盘 `p{path}_f{frame}/slc/`（退化键用 `local` 目录）— 同意？  
+4. 不支持 `select_pairs` / `merge` — 同意？  
+5. `verify_checksum` 默认 False — 同意？  
+6. `stac_api_url` 默认空，调用前必填 — 同意？  
+7. 鉴权：Bearer + basic 足够？  
+8. PR 排除 `refs/stac-ingest-design_v2.zh.md` — 同意？  
+
+---
+
+**请确认或批注本 v0.4。** 收到「确认方案，开写代码」之前，**不修改** `src/` 业务代码。

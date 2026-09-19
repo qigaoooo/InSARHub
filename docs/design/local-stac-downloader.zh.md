@@ -2,8 +2,8 @@
 
 | 项 | 内容 |
 |---|---|
-| 文档版本 | **v0.4（复盘修订稿，待确认）** |
-| 状态 | **只迭代文档；你确认前不写业务代码** |
+| 文档版本 | **v0.4.1（清单已按推荐锁定）** |
+| 状态 | **确认清单已锁定；仍待你说「确认方案，开写代码」后才改 `src/`** |
 | 分支 | `feat/stac-api`（fork: `qigaoooo/InSARHub`） |
 | 对接对象 | 本地 Docker **STAC API**（stac-ingest → 官方 `stac-fastapi-pgstac` + `/assets/`） |
 | 上游设计参照 | [`refs/stac-ingest-design_v2.zh.md`](refs/stac-ingest-design_v2.zh.md)（**不进上游 PR**） |
@@ -453,19 +453,21 @@ Session：`requests.Session()`；`verify=ssl_verify`；headers 带可选 Bearer�
 
 ---
 
-## 13. 待你确认的清单
+## 13. 确认清单（已按推荐锁定，2026-09-19）
 
-请逐条回复 **同意 / 修改**：
+用户授权「按照推荐建议」——下列全部视为 **已同意**：
 
-1. MVP：`gui_hidden=True`，主入口 CLI/Python — 同意？  
-2. 注册名 `STAC_API`、仅 `requests`、默认 Collection `sentinel-1-slc` — 维持？  
-3. 落盘 `p{path}_f{frame}/slc/`（退化键用 `local` 目录）— 同意？  
-4. 不支持 `select_pairs` / `merge` — 同意？  
-5. `verify_checksum` 默认 False — 同意？  
-6. `stac_api_url` 默认空，调用前必填 — 同意？  
-7. 鉴权：Bearer + basic 足够？  
-8. PR 排除 `refs/stac-ingest-design_v2.zh.md` — 同意？  
+| # | 项 | 锁定决定 |
+|---|---|---|
+| 1 | MVP 入口 | **`gui_hidden=True`**，主入口 CLI / Python API |
+| 2 | 注册与依赖 | **`STAC_API`**；仅 **`requests`**；默认 Collection **`sentinel-1-slc`** |
+| 3 | 落盘 | **`p{path}_f{frame}/slc/`**；退化键用 `local` 目录 |
+| 4 | 配对 / merge | MVP **不支持** `select_pairs`、`merge=True` |
+| 5 | checksum | **`verify_checksum` 默认 False** |
+| 6 | API URL | **`stac_api_url` 默认空**，调用前必填（对端定稿后写文档推荐值） |
+| 7 | 鉴权 | **Bearer + basic** 足够（密钥不入仓库） |
+| 8 | 上游 PR | **排除** `docs/design/refs/stac-ingest-design_v2.zh.md` |
 
 ---
 
-**请确认或批注本 v0.4。** 收到「确认方案，开写代码」之前，**不修改** `src/` 业务代码。
+下一步：回复 **「确认方案，开写代码」** 后按 §11 实现顺序改 `src/`。此前仍不修改业务代码。

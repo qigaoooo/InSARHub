@@ -1,7 +1,7 @@
 # InSARHub 本地 STAC 数据源扩展详细设计说明书
 
-**文档版本：V1.1（现行唯一设计基线）**  
-**状态：取代并废除 `local-stac-downloader.zh.md`（v0.4.1）；V1.1 按[后端贡献指南](https://jldz9.github.io/InSARHub/v0.4.2/zh/contributing/backend/)收紧实现约束**  
+**文档版本：V1.2（现行唯一设计基线）**  
+**状态：STAC 只作为 InSARHub Downloader；不另建客户端、路由、任务库或缓存体系**  
 **项目性质：InSARHub Fork 二次开发**  
 **目标：在原 InSARHub 基础上增加标准 STAC API 数据源支持**  
 **计算端部署：Docker**  
@@ -14,40 +14,30 @@
 
 本文是 InSARHub 本地 STAC 数据源扩展的**正式实施设计、开发交接、联调和验收基线**。实现时以 [后端贡献指南](https://jldz9.github.io/InSARHub/v0.4.2/zh/contributing/backend/) 和仓库 `CONTRIBUTING.md` 为准；后文若与本节冲突，以本节为准。`refs/stac-ingest-design_v2.zh.md` 只作存储端对照。
 
-## 1.1 贡献指南约束
+## 1.1 实现约束（高于后文）
 
-STAC 不是 ASF。按指南「添加新基础下载器」：继承 `insarhub.core.base.BaseDownloader`，**不**继承 `ASF_Base_Downloader`。
+后文若仍出现独立 Cache、`stac_cache`、SQLite、`STAC-0xx`、额外 FastAPI 路由或单独的 STAC Client，一律作废，以本节为准。依据是 [后端贡献指南](https://jldz9.github.io/InSARHub/v0.4.2/zh/contributing/backend/) 和 `CONTRIBUTING.md`。
 
-| 指南要求 | 本设计 |
+| 约束 | 做法 |
 |---|---|
-| 中间基类不设 `name` | `STAC_Base` 不注册 |
-| 叶子类设 `name` | `STAC_API` |
-| 在 `downloader/__init__.py` import | 否则不会注册 |
-| 配置写入 `config/defaultconfig.py` 并从 `config/__init__.py` 导出 | `STAC_Base_Config` / `STAC_API_Config` |
-| 路径只用 `config/paths.py` | 新增 `STACPaths`，禁止 `workdir / "cache"` 这类字面量 |
-| 无 Processor 消费则不能出现在 GUI | `gui_hidden = True`（否则 `test_gui_offers_only_downloaders_a_processor_can_consume` 失败） |
-| 行为变更写 `test/tier2_basic/` | 见 §54；不另建测试体系 |
-| 更新 `CHANGELOG.md` 的 `[Unreleased]` | 每个对用户可见的行为变更都写 |
-| 不新增依赖 | HTTP 用已有 `requests`；不引入 `pystac` |
-| 优先改已有文件 | 只加 `stac_base.py`、`stac_api.py` 及 config/paths 增量；不新开包、不新写 FastAPI 路由 |
-| 注释只写为什么 | 不写复述代码的注释 |
-| CLI 与 GUI 共用逻辑放 `utils/` | 本下载器逻辑留在 downloader；不要在 `app/routes/` 再抄一份 |
+| `STAC_API` 只是 Downloader | `name = "STAC_API"`，实现 `BaseDownloader` 的 `search` / `download` / `filter` / `footprint` / `summary` / `reset` |
+| `STAC_Base` | 仅当多条产品线要共享 STAC 协议时才保留；**不设 `name`，不注册**。只有一个叶子时，逻辑可以直接写在 `STAC_API`，不要为「将来」先拆一层 |
+| 不新增 STAC Client 服务 | 不新容器、不新进程、不新包 |
+| 不新增 FastAPI 路由 | 沿用已有 downloader 命令与 CLI |
+| 不新增任务数据库 | 不用 SQLite / 状态机。进度沿用下载器自己的日志；GUI 任务仍走现有 `state._jobs`（本期 `gui_hidden`，不为此加表） |
+| 不新增缓存体系 | 不建 `stac_cache`、不建命中数据库。文件直接进现有 workdir |
+| 工作目录 | `config.workdir`，与其它下载器相同 |
+| `active_results` | `search()` 之后为 `dict[tuple, list]`，过滤结果放 `_subset`，与 `ASF_Base_Downloader` 的用法一致，但是自己的实现 |
+| CLI / Config | `commands/downloader.py` 已泛型；配置进 `defaultconfig.py` 并从 `config/__init__.py` 导出；`_ui_groups` / `_ui_fields` 跟现有 dataclass |
+| Paths | 只用 `config/paths.py` 里已有的 `StackPaths`（`p{path}_f{frame}/slc/`）。不为 STAC 再做一个缓存数据类 |
+| 不改 `BaseDownloader` | 不改 `core/base.py` 的 ABC |
+| 不继承 `ASF_Base_Downloader` | STAC 不是 ASF |
+| 测试 | 只使用 `tier1_install` / `tier2_basic` / `tier3_e2e` / `tier4_regression`。行为放 tier2；真机不是默认 `pytest` |
+| 交接 | `feat/...` 分支、一次提交一件事、`CHANGELOG.md` 的 `[Unreleased]`、文档、向 `main` 开 PR |
 
-设置面板字段跟仓库现有写法，而不是指南示例里的另一种列表形状。本仓库 `defaultconfig.py` 用的是：
+`gui_hidden = True`，直到有 Processor 声明 `compatible_downloader = "STAC_API"`。不实现 `select_pairs` 与 `merge`。不新增依赖。HTTP 用已有 `requests`。
 
-```python
-_ui_groups: ClassVar[list] = [{"label": "STAC", "fields": ["stac_api_url", "max_workers"]}]
-_ui_fields: ClassVar[dict] = {
-    "stac_api_url": {"type": "text", "hint": "STAC API Landing Page URL"},
-    "max_workers": {"type": "number", "min": 1, "max": 16},
-}
-```
-
-`gui_hidden=True` 时这些字段仍要写全，供 CLI 和日后揭开 GUI。本期不改 React。
-
-MVP 不接 ISCE2 / MintPy，不实现 `select_pairs` 与 `merge`。文末数据流图画到处理器，只表示目标拓扑。`sceneName` 用 `Item.id`；落盘文件名用 Asset basename，不用带 `asf:` 前缀的 id。
-
-异常沿用现有下载器的 `ValueError` / 日志，不新造 `STAC-0xx` 错误码体系。后文错误码表只作联调口头分类，不进入代码。
+下载就是把 Asset `href` 写到 `StackPaths` 指出的 `slc/` 目录。目标文件已存在且大小一致则跳过，这和现有下载器一样，不是另一套缓存。
 
 本项目不是重新开发 STAC Server，也不是新增一个独立 STAC Client 服务，而是在已有 InSARHub Fork 中增加一个新的数据源适配器：
 
@@ -404,37 +394,38 @@ Asset Gateway 必须：
 
 # 8. InSARHub 代码结构
 
-只做指南允许的增量，不新开包：
+只做指南允许的增量：
 
 ```text
-src/insarhub/downloader/stac_base.py     # STAC_Base，无 name
-src/insarhub/downloader/stac_api.py      # STAC_API，name + gui_hidden
-src/insarhub/downloader/__init__.py      # import 叶子模块
-src/insarhub/config/defaultconfig.py     # STAC_Base_Config / STAC_API_Config
-src/insarhub/config/__init__.py          # 导出
-src/insarhub/config/paths.py             # STACPaths
+src/insarhub/downloader/stac_api.py       # 叶子；确有共享协议时才拆 stac_base.py，且基类无 name
+src/insarhub/downloader/__init__.py       # import 叶子
+src/insarhub/config/defaultconfig.py      # Config
+src/insarhub/config/__init__.py           # 导出
 test/tier2_basic/test_stac_api.py
-CHANGELOG.md                             # [Unreleased]
+CHANGELOG.md
 docs/advanced/downloader.md
 docs/advanced/downloader.zh.md
 ```
 
-不改 `app/routes/`、不改前端。CLI 已通过 `commands/downloader.py` 调任意 `BaseDownloader`。
-
-`STAC_Base` 实现指南要求的六个抽象方法：`search`、`download`、`filter`、`footprint`、`summary`、`reset`。`select_pairs` 不是抽象方法，MVP 显式 `NotImplementedError`。
+不改 `core/base.py`，不改 `app/routes/`，不改前端，不新增 `STACPaths`。落盘调用已有 `StackPaths`。六个抽象方法由注册的 `STAC_API` 实现。只有出现第二个 STAC 下载器、协议代码会复制时，才把共享部分抽到无 `name` 的 `STAC_Base`。
 
 ---
 
 # 9. 类设计
 
+默认只有叶子：
+
 ```text
 BaseDownloader
       │
       ▼
-STAC_Base
-      │
-      ▼
-STAC_API
+STAC_API          # name = "STAC_API"；gui_hidden = True
+```
+
+`STAC_Base` 不是必选项。下面这层只在确有第二份 STAC 下载器要共享协议时才加，而且基类不设 `name`：
+
+```text
+BaseDownloader → STAC_Base（无 name）→ STAC_API
 ```
 
 ## 9.1 STAC_Base
@@ -933,63 +924,25 @@ ssl_verify = false
 
 # 21. Download 设计
 
-下载流程：
-
-```text
-STAC Item
-    ↓
-Asset
-    ↓
-Cache lookup
-    ↓
-Cache Hit?
-   ├── Yes → verify → use
-   └── No
-          ↓
-       download
-          ↓
-        .part
-          ↓
-        size
-          ↓
-      checksum
-          ↓
-     atomic rename
-          ↓
-       READY
-```
+服从 §1.1。没有独立 Cache。流程与现有下载器相同：从 `active_results` 取场景，把主 Asset 下载到 `StackPaths` 的 `slc/` 目录。目标文件已存在且大小一致则跳过。可选校验 checksum，失败则删除该文件并报错。不写任务库。
 
 ---
 
-# 22. 本地缓存
+# 22. 落盘位置
 
-存储服务器和计算服务器不是同一台，计算侧必须把 Asset 落到本机。目录由 `STACPaths` 给出，相对 `config.workdir`，不写死 `/data/cache`：
+不新增缓存目录。使用已有 `StackPaths`：
 
-```python
-@dataclass
-class STACPaths:
-    workdir: Path
-
-    @property
-    def cache_dir(self) -> Path:
-        return self.workdir / "stac_cache"
+```text
+workdir/p{path}_f{frame}/slc/<Asset basename>
 ```
 
-Docker 只是把已有 workdir 挂进容器。不要为 STAC 再加一套与 InSARHub workdir 平行的 volume 约定。这个缓存不是 `ISCEPaths.slc_dir`，MVP 不把它交给处理器。
+分组键退化时，目录名仍由 `paths.py` 里的现有方法生成，不在下载器里拼 `workdir / "stac_cache"`。workdir 本身就是 Downloader 到后续 Processor 的工作空间，计算服务器上持久化的就是这个目录，不是另一块 cache 盘。
 
 ---
 
-# 23. Cache 目录结构
+# 23. 文件名
 
-在 `STACPaths.cache_dir` 之下：
-
-```text
-<workdir>/stac_cache/
-└── <collection>/
-    └── <safe-item-key>/
-        └── <asset-key>/
-            └── <filename>
-```
+落盘名是 Asset `href` 的 basename，不是 `Item.id`。禁止把 `..`、绝对路径或 `file://` 写进目标路径。校验失败的半成品删掉，不留在 `slc/` 里冒充成功。
 
 `safe-item-key` 不直接使用未经处理的 Item ID。
 
@@ -1006,39 +959,9 @@ Docker 只是把已有 workdir 挂进容器。不要为 STAC 再加一套与 InS
 
 ---
 
-# 24. Cache 命中条件
+# 24. 已存在文件
 
-必须同时：
-
-```text
-本地文件存在
-AND
-size == file:size
-AND
-checksum == file:checksum
-```
-
-才算：
-
-```text
-CACHE_HIT
-```
-
-仅：
-
-```text
-文件存在
-```
-
-不能算命中。
-
-仅：
-
-```text
-文件大小相同
-```
-
-也不能算可靠命中。
+与现有下载器相同：目标文件已在，且 `file:size` 一致，则跳过。没有单独的 CACHE_HIT 状态，也不要求先查一张缓存表。checksum 仅在配置打开时再验；验失败则删除并重新下载这一次，不记入数据库。
 
 ---
 
@@ -1356,62 +1279,15 @@ STAC_MIN_FREE_BYTES
 
 ---
 
-# 34. InSARHub Job 数据关联
+# 34. 与现有工作目录的关系
 
-STAC 数据下载不能只得到一个本地路径。
-
-至少需要能够关联：
-
-```text
-InSAR Job
-    ↓
-STAC Collection
-    ↓
-STAC Item.id
-    ↓
-Asset key
-    ↓
-Asset href
-    ↓
-Local Cache path
-```
-
-建议 Job 元数据保存：
-
-```text
-stac_collection
-stac_item_id
-stac_asset_key
-stac_asset_href
-asset_size
-asset_checksum
-local_cache_path
-```
-
-如果当前 InSARHub 数据模型暂时不适合直接增加数据库字段，则至少要在运行上下文/任务产物中保存相同信息。
+不另建 Job 数据库，也不把 STAC 来源写成侧车数据库。场景身份已经在 `active_results` 的 `properties` 里（`sceneName`、`fileID`、`url`、`collection`）。工作目录里的文件就是后续步骤要用的输入。若现有 `insarhub_config.json` 会记下 downloader 类型和 config，沿用该文件，不新加一张表。
 
 ---
 
-# 35. 来源追踪
+# 35. 来源
 
-对于每个实际用于 InSAR 计算的文件，必须能回答：
-
-```text
-这个文件来自哪个 STAC Item？
-哪个 Collection？
-哪个 Asset？
-哪个 href？
-下载时的 checksum 是什么？
-实际文件 checksum 是什么？
-```
-
-这是以后：
-
-- 结果复现；
-- 任务追踪；
-- 数据治理；
-
-的基础。
+来源就是 `properties` 里的 `fileID`、`collection`、`url`，以及 workdir 里的文件。不再做一套追踪库。
 
 ---
 
@@ -1833,42 +1709,13 @@ http://127.0.0.1:xxxx
 
 ---
 
-# 49. Docker Volume
+# 49. 容器与工作目录
 
-推荐：
+不新增 cache / work / output 三套 volume。InSARHub 容器只挂现有 workdir。不挂载存储服务器的 `DATA_ROOT`。
 
-```yaml
-services:
-  insarhub:
-    volumes:
-      - ./data/cache:/data/cache
-      - ./data/work:/data/work
-      - ./data/output:/data/output
-```
+# 50. 持久化
 
-不挂载：
-
-```text
-/mnt/diskrsdata
-```
-
----
-
-# 50. Cache 持久化
-
-容器重建：
-
-```text
-Cache 不应全部丢失
-```
-
-因此：
-
-```text
-/data/cache
-```
-
-必须使用持久卷或宿主机目录。
+持久化的是 workdir 里已下载的 `slc/` 文件。容器重建后，只要 workdir 还在，不需要单独恢复缓存卷或 SQLite。
 
 ---
 
@@ -2571,15 +2418,14 @@ TLS
 
 # 73. 实施顺序
 
-每次提交一个逻辑变更，并更新 `CHANGELOG.md` 的 `[Unreleased]`。顺序：
+每次提交一个逻辑变更，并更新 `CHANGELOG.md` 的 `[Unreleased]`。完成后向 `main` 开 PR。顺序：
 
-1. `STACPaths` + Config（含 `_ui_groups` / `_ui_fields`）+ 导出  
-2. `STAC_Base` 六方法与 `STACProduct` 格式化  
-3. 下载、`.part`、size；checksum 按配置  
-4. `STAC_API` 注册，`gui_hidden=True`，`downloader/__init__.py` import  
-5. `test/tier2_basic` 与 `docs/advanced/downloader*.md`  
+1. Config（`defaultconfig.py` + 导出）与 `STAC_API` 六个方法的空实现、注册、`gui_hidden=True`
+2. Search：Landing Page、分页、`active_results`
+3. Download：写入 `StackPaths` 的 `slc/`，跳过已存在且大小一致的文件
+4. `test/tier2_basic` 与 `docs/advanced/downloader*.md`
 
-不在同一批里做 GUI、`select_pairs`、处理器对接。真机联调等存储端 STAC 可用后再做，不挡上述测试。
+不在这些提交里做 GUI、新路由、任务库、缓存目录或处理器对接。
 
 ## P3：增强
 

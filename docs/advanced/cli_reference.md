@@ -140,6 +140,10 @@ insarhub downloader -N S1_SLC \
 | `--worker` | `3` | Parallel download workers |
 | `--no-verify-ssl` | — | Disable SSL certificate verification for ASF downloads. Use this if ASF's certificate has expired and downloads fail with an SSL error |
 | `--footprint` | `<workdir>/footprint.png` | Save a footprint map image to this path |
+| `--stage-archive` | — | Stage scenes from `--local-archive` into each `stack_*.json`’s `slc/` (no ASF search). See [Local SAR archive](#local-sar-archive) |
+| `--local-archive PATH` | — | Central library of already-downloaded `.zip` / `.SAFE` (and `.EOF`) products |
+| `--archive-mode` | `symlink` | How to place archive products: `symlink`, `hardlink`, or `copy` |
+| `--archive-only` | — | Never fall back to network download; fail if a scene is missing from the archive |
 
 ```bash
 # Search, select pairs, and download with orbit files saved per-stack
@@ -148,6 +152,17 @@ insarhub downloader -N S1_SLC \
     --start 2020-01-01 --end 2020-12-31 \
     --select-pairs --download -O \
     --footprint footprint.png
+
+# Prefer a local SAR library (stage symlinks; download only missing scenes)
+insarhub downloader -N S1_SLC \
+    --AOI -113.05 37.74 -112.68 38.00 \
+    --start 2020-01-01 --end 2020-12-31 \
+    --select-pairs --download -O \
+    --local-archive /data/sar_archive
+
+# Offline: stack JSON already exists — stage from archive only
+insarhub downloader -w /data/jobs/p100_f466 \
+    --stage-archive --local-archive /data/sar_archive --archive-only
 
 # Save all orbit files to a specific directory
 insarhub downloader -N S1_SLC \
@@ -161,6 +176,18 @@ insarhub downloader -N S1_SLC \
     --start 2020-01-01 --end 2020-12-31 \
     -O orbits/
 ```
+
+### Local SAR archive
+
+Keep a central on-disk library of ASF-named products (flat or nested). Per-stack
+workdirs only receive the scenes listed for that stack — staged as symlinks by
+default — so you do **not** point `slc_dir` at the entire library.
+
+1. Search + `--select-pairs` (download optional) to write `stack_*.json`.
+2. Either `--download --local-archive …` (stages hits, network for gaps) or
+   `--stage-archive --local-archive …` (offline, no search).
+3. Submit a local processor (`ISCE2_S1` / `GMTSAR_S1`), optionally with the same
+   `--local-archive` so submit stages any still-missing pair scenes into `slc_dir`.
 
 ### Merging multiple frames
 

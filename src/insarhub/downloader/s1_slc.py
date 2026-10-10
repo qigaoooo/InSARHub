@@ -133,6 +133,36 @@ class S1_SLC(ASF_Base_Downloader):
                             break
                 if already_have:
                     continue
+
+                # Prefer a covering .EOF from local_archive when configured
+                archive_dir = getattr(self.config, "local_archive", None)
+                if archive_dir:
+                    from insarhub.utils.local_archive import (
+                        build_archive_index, find_orbit_in_archive, stage_path,
+                    )
+                    if not hasattr(self, "_orbit_archive_index"):
+                        self._orbit_archive_index = build_archive_index(archive_dir)
+                    eof_src = find_orbit_in_archive(self._orbit_archive_index, acq_time)
+                    if eof_src is not None:
+                        try:
+                            stage_path(
+                                eof_src, download_path,
+                                mode=getattr(self.config, "archive_mode", "symlink") or "symlink",
+                            )
+                            pbar.set_postfix_str(f"archive {short_name}")
+                            continue
+                        except Exception:
+                            if getattr(self.config, "archive_only", False):
+                                tqdm.write(
+                                    f"{Fore.RED}[ERROR] orbit stage failed for {scene_name}"
+                                )
+                                continue
+                    elif getattr(self.config, "archive_only", False):
+                        tqdm.write(
+                            f"{Fore.YELLOW}[WARN] No orbit in local_archive for: {scene_name}"
+                        )
+                        continue
+
                 pbar.set_postfix_str(f"fetch {short_name}")
                 _save = download_path.as_posix()
                 try:

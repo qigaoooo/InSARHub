@@ -87,6 +87,12 @@ class ASF_Base_Config:
     # rewrites a multi-GB product). A value that suits one starves or overloads
     # the other.
     max_workers: int = 3
+    # Local SAR archive: when set, download() stages matching products from this
+    # directory (symlink by default) instead of fetching them from ASF. Layout
+    # may be flat or nested; matching is by ASF fileName / sceneName / .SAFE.
+    local_archive: Path | str | None = None
+    archive_mode: str = "symlink"   # symlink | hardlink | copy
+    archive_only: bool = False      # if True, never fall back to network download
 
     # ── UI metadata consumed by the API / settings panel ─────────────────────
     # The downloader CONFIG panel is deliberately minimal: only the operational
@@ -98,7 +104,8 @@ class ASF_Base_Config:
     # stay defined (harmless) in case a downloader re-groups them.
     _ui_groups: ClassVar[list] = [
         {"label": "Download",
-         "fields": ["max_workers", "maxResults", "ssl_verify"]},
+         "fields": ["max_workers", "maxResults", "ssl_verify",
+                    "local_archive", "archive_mode", "archive_only"]},
     ]
     _ui_fields: ClassVar[dict] = {
         "max_workers":     {"type": "number", "min": 1, "max": 16, "step": 1,
@@ -106,6 +113,16 @@ class ASF_Base_Config:
         "ssl_verify":      {"type": "bool",
                             "hint": "Verify ASF's SSL certificate. Turn OFF only if downloads "
                                     "fail with an expired-certificate error."},
+        "local_archive":   {"type": "text",
+                            "hint": "Directory of already-downloaded SAR products (.zip / .SAFE). "
+                                    "On download, matching scenes are staged from here "
+                                    "(symlink/hardlink/copy) instead of re-fetched from ASF."},
+        "archive_mode":    {"type": "select",
+                            "options": ["symlink", "hardlink", "copy"],
+                            "hint": "How to place archive products into the stack slc/ folder."},
+        "archive_only":    {"type": "bool",
+                            "hint": "Never download from the network. Fail if a scene is missing "
+                                    "from local_archive."},
         # Dataset
         "dataset":         {"type": "text",
                             "hint": "Dataset to search (e.g. SENTINEL-1, ALOS, NISAR)"},
@@ -199,6 +216,16 @@ class ASF_Base_Config:
     def __post_init__(self):
         if isinstance(self.workdir, str):
             self.workdir = Path(self.workdir).expanduser().resolve()
+        if self.local_archive is not None and str(self.local_archive).strip():
+            self.local_archive = Path(self.local_archive).expanduser().resolve()
+        else:
+            self.local_archive = None
+        mode = (self.archive_mode or "symlink").strip().lower()
+        if mode not in ("symlink", "hardlink", "copy"):
+            raise ValueError(
+                f"archive_mode must be 'symlink', 'hardlink', or 'copy', got {self.archive_mode!r}"
+            )
+        self.archive_mode = mode
 
 @dataclass
 class S1_SLC_Config(ASF_Base_Config):
@@ -405,7 +432,8 @@ class ISCE2_S1_Config:
 
     _ui_groups: ClassVar[list] = [
         {"label": "Paths",
-         "fields": ["slc_dir", "orbit_dir", "aux_dir", "dem_path"]},
+         "fields": ["slc_dir", "orbit_dir", "aux_dir", "dem_path",
+                    "local_archive", "archive_mode"]},
         {"label": "Area of interest",
          "fields": ["full_frame", "bbox"]},
         {"label": "Coregistration",
@@ -432,6 +460,11 @@ class ISCE2_S1_Config:
         "orbit_dir":                {"type": "text", "hint": "Directory with .EOF orbit files. Default = workdir/slc"},
         "aux_dir":                  {"type": "text", "hint": "Directory with AUX_CAL files. Default = workdir/slc"},
         "dem_path":                 {"type": "text", "hint": "ISCE2-format DEM, GeoTIFF, or directory. Default = workdir/dem (GLO-30 auto-downloaded if absent)"},
+        "local_archive":            {"type": "text",
+                                     "hint": "Central SAR archive. On submit, pair scenes missing from slc_dir are staged from here (symlink/hardlink/copy)."},
+        "archive_mode":             {"type": "select",
+                                     "options": ["symlink", "hardlink", "copy"],
+                                     "hint": "How to stage products from local_archive into slc_dir."},
         "bbox":                     {"type": "text", "hint": "Bounding box S N W E, e.g. 33.0 38.0 -120.0 -115.0. Leave blank to auto-derive from SLC footprints"},
         "full_frame":               {"type": "bool",
                                      "hint": "Process full SLC frame — ignore AOI/bbox and let ISCE2 determine the extent"},
@@ -492,6 +525,8 @@ class ISCE2_S1_Config:
     orbit_dir: Path | str | None          = "auto"
     aux_dir: Path | str | None            = "auto"
     dem_path: Path | str | None           = "auto"
+    local_archive: Path | str | None      = None
+    archive_mode: str                     = "symlink"
     isce_home: Path | str | None          = "auto"
     saved_job_path: Path | str | None     = None
     # Area / dates
@@ -556,6 +591,17 @@ class ISCE2_S1_Config:
             self.slc_dir = Path(self.workdir) / "slc"
         elif isinstance(self.slc_dir, str):
             self.slc_dir = Path(self.slc_dir).expanduser().resolve()
+
+        if self.local_archive is not None and str(self.local_archive).strip():
+            self.local_archive = Path(self.local_archive).expanduser().resolve()
+        else:
+            self.local_archive = None
+        mode = (self.archive_mode or "symlink").strip().lower()
+        if mode not in ("symlink", "hardlink", "copy"):
+            raise ValueError(
+                f"archive_mode must be 'symlink', 'hardlink', or 'copy', got {self.archive_mode!r}"
+            )
+        self.archive_mode = mode
 
         # orbit_dir / aux_dir: "auto" → workdir/slc (same folder as downloaded SLC/orbit files)
         for attr in ("orbit_dir", "aux_dir"):
@@ -1152,7 +1198,8 @@ class GMTSAR_S1_Config(GMTSAR_Base_Config):
     # I/O + TOPS knobs up top, the shared processing params below).
     _ui_groups: ClassVar[list] = [
         {"label": "Paths",
-         "fields": ["slc_dir", "orbit_dir", "dem_path"]},
+         "fields": ["slc_dir", "orbit_dir", "dem_path",
+                    "local_archive", "archive_mode"]},
         {"label": "Area of interest",
          "fields": ["AOI", "process_full_extent"]},
         {"label": "Sentinel-1",
@@ -1170,6 +1217,11 @@ class GMTSAR_S1_Config(GMTSAR_Base_Config):
         **GMTSAR_Base_Config._ui_fields,
         "slc_dir":         {"type": "text", "hint": "Directory with Sentinel-1 SLC .SAFE files"},
         "orbit_dir":       {"type": "text", "hint": "Directory with .EOF orbit files"},
+        "local_archive":   {"type": "text",
+                             "hint": "Central SAR archive. On submit, pair scenes missing from slc_dir are staged from here."},
+        "archive_mode":    {"type": "select",
+                             "options": ["symlink", "hardlink", "copy"],
+                             "hint": "How to stage products from local_archive into slc_dir."},
         "AOI":             {"type": "text", "hint": "Geographic area of interest: same formats the downloader --aoi accepts (a bbox [min_lon, min_lat, max_lon, max_lat], a spatial file path, or a WKT string). Auto-converted to GMTSAR region_cut (radar coords) via SAT_llt2rat, cropping processing to this area, and used as the DEM-download extent fallback. Blank = read from the workdir's insarhub_config.json (downloader intersectsWith); still blank = full frame + SLC-footprint DEM."},
         "process_full_extent": {"type": "bool", "hint": "Process the full SLC frame — ignore the AOI (and the downloader's intersectsWith): no region_cut/reframe, DEM from the SLC footprint. Overrides AOI when checked."},
         "subswath":        {"type": "text",
@@ -1201,6 +1253,8 @@ class GMTSAR_S1_Config(GMTSAR_Base_Config):
     name: str                     = "GMTSAR_S1_Config"
     slc_dir: Path | str | None    = "auto"
     orbit_dir: Path | str | None  = "auto"
+    local_archive: Path | str | None = None
+    archive_mode: str             = "symlink"
     # Geographic AOI -> auto-converted to region_cut (radar coords) via
     # SAT_llt2rat, and used as the DEM-download extent fallback. Accepts any
     # form utils.tool._to_wkt does (same as the downloader --aoi): a bbox
@@ -1288,6 +1342,19 @@ class GMTSAR_S1_Config(GMTSAR_Base_Config):
     hpc_mode: bool                = False
     max_concurrent_hpc: int       = 12
     sbatch_options_per_step: dict = field(default_factory=dict)
+
+    def __post_init__(self):
+        # GMTSAR_Base_Config has no __post_init__; resolve archive fields only.
+        if self.local_archive is not None and str(self.local_archive).strip():
+            self.local_archive = Path(self.local_archive).expanduser().resolve()
+        else:
+            self.local_archive = None
+        mode = (self.archive_mode or "symlink").strip().lower()
+        if mode not in ("symlink", "hardlink", "copy"):
+            raise ValueError(
+                f"archive_mode must be 'symlink', 'hardlink', or 'copy', got {self.archive_mode!r}"
+            )
+        self.archive_mode = mode
 
 
 def _aoi_bbox_from_folder(folder) -> list[float] | None:

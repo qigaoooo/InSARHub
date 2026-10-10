@@ -138,6 +138,10 @@ insarhub downloader -N S1_SLC \
 | `--worker` | `3` | 并行下载工作线程数 |
 | `--no-verify-ssl` | — | 禁用 ASF 下载的 SSL 证书验证。当 ASF 证书过期导致下载失败时使用 |
 | `--footprint` | `<workdir>/footprint.png` | 将覆盖范围地图图像保存到此路径 |
+| `--stage-archive` | — | 从 `--local-archive` 将 `stack_*.json` 中的场景挂到各栈的 `slc/`（不搜索 ASF）。见[本地 SAR 影像库](#local-sar-archive) |
+| `--local-archive PATH` | — | 已下载好的 `.zip` / `.SAFE`（及 `.EOF`）中央库路径 |
+| `--archive-mode` | `symlink` | 放入工作目录的方式：`symlink` / `hardlink` / `copy` |
+| `--archive-only` | — | 禁止回退到网络下载；库中缺景则失败 |
 
 ```bash
 # 搜索、选择干涉对，并下载（轨道文件按堆叠保存）
@@ -146,6 +150,17 @@ insarhub downloader -N S1_SLC \
     --start 2020-01-01 --end 2020-12-31 \
     --select-pairs --download -O \
     --footprint footprint.png
+
+# 优先使用本地影像库（软链挂载；仅缺景才下载）
+insarhub downloader -N S1_SLC \
+    --AOI -113.05 37.74 -112.68 38.00 \
+    --start 2020-01-01 --end 2020-12-31 \
+    --select-pairs --download -O \
+    --local-archive /data/sar_archive
+
+# 离线：已有 stack JSON，仅从本地库挂载
+insarhub downloader -w /data/jobs/p100_f466 \
+    --stage-archive --local-archive /data/sar_archive --archive-only
 
 # 将所有轨道文件保存到指定目录
 insarhub downloader -N S1_SLC \
@@ -159,6 +174,17 @@ insarhub downloader -N S1_SLC \
     --start 2020-01-01 --end 2020-12-31 \
     -O orbits/
 ```
+
+### 本地 SAR 影像库 {#local-sar-archive}
+
+维护一个中央影像库（扁平或按目录嵌套，文件名保持 ASF 原名）。每个任务工作目录
+只挂载该栈需要的场景（默认软链），**不要**把整个库直接当作 `slc_dir`。
+
+1. 搜索并 `--select-pairs`（可不下载）写出 `stack_*.json`。
+2. 用 `--download --local-archive …`（库中有的挂载、缺的再下），或
+   `--stage-archive --local-archive …`（完全离线、不搜索）。
+3. 提交本地处理器（`ISCE2_S1` / `GMTSAR_S1`）时也可带同一 `--local-archive`，
+   在 submit 时把仍缺失的场景挂进 `slc_dir`。
 
 ### 合并多个帧 {#merging-multiple-frames}
 

@@ -356,6 +356,9 @@ class ISCE2_S1(ISCE2_Base):
             self._reinvoke_via_container("submit", steps)
             return self.jobs
 
+        from insarhub.utils.local_archive import maybe_stage_for_processor
+        maybe_stage_for_processor(self.config, self.pairs)
+
         dem_path = _prepare_dem(self.config, self.workdir)
         aux_dir  = self._resolve_aux_dir()
         self._generate_run_files(dem_path, aux_dir, pairs=self.pairs)

@@ -153,9 +153,21 @@ Downloader.available()
 
     - **下载**
 
-        将当前搜索结果中的所有场景下载到本地存储
+        将当前搜索结果中的所有场景下载到本地存储。
+        在配置中设置 `local_archive` 后，会优先从中央本地影像库挂载匹配产品
+        （默认软链），而不是重复从 ASF 下载——见
+        [本地 SAR 影像库](cli_reference.zh.md#local-sar-archive)。
 
         ```python
+        from insarhub import Downloader
+        dl = Downloader.create(
+            "S1_SLC",
+            intersectsWith=AOI,
+            local_archive="/data/sar_archive",
+            archive_mode="symlink",  # 或 hardlink / copy
+            # archive_only=True,    # 缺景时不回退网络
+        )
+        dl.search()
         dl.download()
         ```
 

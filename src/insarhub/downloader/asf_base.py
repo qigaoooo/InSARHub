@@ -119,7 +119,8 @@ class ASF_Base_Downloader(BaseDownloader):
     # retry loop below burns ~17 minutes of exponential backoff before surfacing
     # it. Subclasses extend this set rather than overriding search().
     _NON_SEARCH_FIELDS: frozenset = frozenset(
-        {"workdir", "name", "bbox", "granule_names", "ssl_verify", "max_workers"})
+        {"workdir", "name", "bbox", "granule_names", "ssl_verify", "max_workers",
+         "local_archive", "archive_mode", "archive_only"})
 
     #: What the second half of a stack key IS, for user-facing output. Frame-based
     #: datasets key on frameNumber; SLC-BURST has no frameNumber at all and keys on
@@ -1277,7 +1278,20 @@ Check documentation for how to setup .netrc file.\n""")
         print(f"Downloading {total_jobs} scene(s) across "
               f"{len(self.active_results)} stack(s)"
               f"{filter_note} ({max_workers} concurrent)...\n")
-        
+
+        # Optional local SAR archive: stage matching products instead of
+        # re-fetching from ASF. Index is built once and shared across workers.
+        archive_dir = getattr(self.config, "local_archive", None)
+        archive_mode = getattr(self.config, "archive_mode", "symlink") or "symlink"
+        archive_only = bool(getattr(self.config, "archive_only", False))
+        archive_index = None
+        if archive_dir:
+            from insarhub.utils.local_archive import build_archive_index
+            archive_index = build_archive_index(archive_dir)
+            print(f"Local archive: {archive_dir} "
+                  f"({len(archive_index)} index keys, mode={archive_mode}"
+                  f"{', archive_only' if archive_only else ''})\n")
+
         def _stream_download_interruptible(url, file_path, expected_bytes, 
                                         pbar_position, scene_name):
             """Stream download that checks stop_event on every chunk."""
@@ -1340,13 +1354,56 @@ Check documentation for how to setup .netrc file.\n""")
             if stop_event.is_set():
                 return file_id, 'cancelled', 0, None
 
-            # Skip if already complete
-            if size_b and file_path.exists() and file_path.stat().st_size == size_b:
-                return file_id, 'skipped', size_mb, None
+            # Skip if already complete in the stack slc/ folder
+            if file_path.exists() or file_path.is_symlink():
+                try:
+                    # Symlink / SAFE dir: presence is enough. For regular files,
+                    # keep the byte-size check when ASF published a size.
+                    if file_path.is_dir() or file_path.is_symlink():
+                        return file_id, 'skipped', size_mb, None
+                    if size_b and file_path.stat().st_size == size_b:
+                        return file_id, 'skipped', size_mb, None
+                    if not size_b and file_path.stat().st_size > 0:
+                        return file_id, 'skipped', size_mb, None
+                except OSError:
+                    pass
+
+            # Stage from local archive when configured
+            if archive_index is not None:
+                from insarhub.utils.local_archive import find_in_archive, stage_path
+                src = find_in_archive(
+                    archive_index,
+                    file_name=filename,
+                    scene_name=scene_name,
+                )
+                if src is not None:
+                    try:
+                        # Prefer the archive basename (.SAFE vs .zip may differ
+                        # from ASF fileName); processors accept either.
+                        status = stage_path(
+                            src, download_path, mode=archive_mode,
+                            dest_name=src.name,
+                        )
+                        label = 'archived' if status == 'staged' else 'skipped'
+                        return file_id, label, size_mb, None
+                    except Exception as e:  # noqa: BLE001
+                        if archive_only:
+                            return file_id, 'failed', 0, (
+                                f"local_archive stage failed for {scene_name}: {e}"
+                            )
+                        # Fall through to network download
+                elif archive_only:
+                    return file_id, 'failed', 0, (
+                        f"not found in local_archive "
+                        f"({archive_dir}): {filename or scene_name}"
+                    )
 
             # Remove incomplete file
-            if file_path.exists():
-                file_path.unlink()
+            if file_path.exists() or file_path.is_symlink():
+                if file_path.is_dir() and not file_path.is_symlink():
+                    pass  # never delete a real directory here
+                else:
+                    file_path.unlink()
 
             with active_files_lock:
                 active_files[position] = file_path
@@ -1373,7 +1430,7 @@ Check documentation for how to setup .netrc file.\n""")
                 return file_id, 'cancelled', 0, None
 
             except Exception as e:
-                if file_path.exists():
+                if file_path.exists() and not file_path.is_dir():
                     file_path.unlink()
                 return file_id, 'failed', 0, str(e)
             finally:
@@ -1399,6 +1456,11 @@ Check documentation for how to setup .netrc file.\n""")
                     success_count += 1
                     if on_progress:
                         on_progress(f"[{completed_count}/{total_jobs}] ✔ {file_id}", pct)
+                elif status == 'archived':
+                    print(f"  {Fore.CYAN}⬆ {file_id} (from local_archive)")
+                    success_count += 1
+                    if on_progress:
+                        on_progress(f"[{completed_count}/{total_jobs}] ⬆ {file_id} (archive)", pct)
                 elif status == 'skipped':
                     print(f"  {Fore.YELLOW}⏭ {file_id} ({value:.1f} MB, already exists)")
                     success_count += 1

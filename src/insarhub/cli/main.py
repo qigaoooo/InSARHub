@@ -171,6 +171,12 @@ def create_parser() -> argparse.ArgumentParser:
                         help=f"Parallel download workers (default: {_DL['max_workers']})")
     g_down.add_argument("--footprint", metavar="PATH",
                         help="Save footprint map image to this path")
+    g_down.add_argument(
+        "--stage-archive", action="store_true", dest="stage_archive",
+        help="Stage scenes listed in workdir stack_*.json from --local-archive into each "
+             "stack's slc/ folder (symlink by default). No ASF search or network download. "
+             "Requires --local-archive / archive_mode / archive_only from the downloader config.",
+    )
 
     # ------------------------------------------------------------------ #
     # processor — submit + manage InSAR processing jobs
@@ -1379,6 +1385,50 @@ def cmd_downloader(args, extra_args: list[str]):
         import urllib3
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         overrides["ssl_verify"] = False
+
+    # Offline path: stage from a local SAR archive using existing stack_*.json
+    # files — no ASF search / download required.
+    if getattr(args, "stage_archive", False):
+        from insarhub.utils.local_archive import stage_from_stack_file
+        archive = overrides.get("local_archive")
+        if not archive:
+            print("[ERROR] --stage-archive requires --local-archive PATH",
+                  file=sys.stderr)
+            sys.exit(1)
+        mode = overrides.get("archive_mode", "symlink") or "symlink"
+        require_all = bool(overrides.get("archive_only", False))
+        stack_files = sorted(workdir.glob("stack_p*_f*.json"))
+        if not stack_files:
+            stack_files = sorted(workdir.glob("*/stack_p*_f*.json"))
+        if not stack_files:
+            print(f"[ERROR] No stack_p*_f*.json under {workdir}. "
+                  "Run --select-pairs first (download optional).",
+                  file=sys.stderr)
+            sys.exit(1)
+        any_missing = False
+        for stack_path in stack_files:
+            dest = stack_path.parent / "slc"
+            print(f"[archive] Staging {stack_path.name} → {dest} "
+                  f"(mode={mode})")
+            try:
+                result = stage_from_stack_file(
+                    stack_path, archive, dest, mode=mode,
+                    require_all=require_all,
+                )
+            except FileNotFoundError as exc:
+                print(f"[ERROR] {exc}", file=sys.stderr)
+                sys.exit(1)
+            print(f"  staged={len(result.staged)} skipped={len(result.skipped)} "
+                  f"missing={len(result.missing)} failed={len(result.failed)}")
+            if result.missing or result.failed:
+                any_missing = True
+                for name in result.missing[:10]:
+                    print(f"  missing: {name}", file=sys.stderr)
+                for name, err in result.failed[:10]:
+                    print(f"  failed: {name}: {err}", file=sys.stderr)
+        if any_missing and require_all:
+            sys.exit(1)
+        return
 
     downloader = Downloader.create(args.downloader_name,
                                    **{k: v for k, v in overrides.items()

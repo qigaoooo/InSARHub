@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Local SAR archive
+
+* Added `local_archive` / `archive_mode` / `archive_only` on ASF downloaders and on `ISCE2_S1` / `GMTSAR_S1`. When set, matching `.zip` / `.SAFE` / covering `.EOF` products are staged from a central on-disk library (symlink by default, or hardlink / copy) instead of re-downloaded from ASF.
+* `insarhub downloader --stage-archive --local-archive /path/to/library` stages scenes listed in existing `stack_*.json` files into each stack’s `slc/` with no network search.
+* Download with `--local-archive` still runs search/`--select-pairs`, but stages hits from the archive; missing scenes fall back to the network unless `--archive-only` is set.
+
 ### HyP3 Job Naming
 
 * Every job in a submission now shares one HyP3 name — `project_name`, default `ifg_<YYYYMMDD_HHMMSS>`. `find_jobs(name=...)` matches exactly, so only a shared name makes a whole project retrievable in one query. The interferogram is identified by its granules instead, in a new `PAIR` column.

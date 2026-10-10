@@ -153,9 +153,21 @@ Downloader.available()
 
     - **Download**
 
-        Download all scenes from current search results to local storage
+        Download all scenes from current search results to local storage.
+        Set `local_archive` on the config to stage matching products from a
+        central on-disk library (symlink by default) instead of re-fetching
+        them from ASF — see [Local SAR archive](cli_reference.md#local-sar-archive).
 
         ```python
+        from insarhub import Downloader
+        dl = Downloader.create(
+            "S1_SLC",
+            intersectsWith=AOI,
+            local_archive="/data/sar_archive",
+            archive_mode="symlink",  # or hardlink / copy
+            # archive_only=True,    # fail instead of network fallback
+        )
+        dl.search()
         dl.download()
         ```
 

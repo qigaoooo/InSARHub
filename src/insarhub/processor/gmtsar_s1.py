@@ -1875,6 +1875,10 @@ class GMTSAR_S1(LocalProcessor):
                 and not (self.config.stack_mode and self.config.hpc_mode)):
             self._reinvoke_via_container("submit")
             return self.jobs
+
+        from insarhub.utils.local_archive import maybe_stage_for_processor
+        maybe_stage_for_processor(self.config, self.pairs)
+
         if self.config.stack_mode:
             return self._submit_stack()
 
